@@ -193,61 +193,41 @@ class CNN(nn.Module):
     
     # DONE - build convolutional layer blocks
     def createCLayers(self, num_layers, blocksize):
-        output_channels = input_channels = 8
 
-        first_layer = nn.Sequential(
-            nn.Conv2d(
-                in_channels=3,
-                out_channels=C_OUT_CHANNELS,
-                kernel_size=3,
-                padding=1
-            ),
-            nn.BatchNorm2d(C_OUT_CHANNELS),
+        input_channels = 3
+        output_channels = 8
+
+        self.layers_c = nn.ModuleList()
+
+        # first layer
+        self.layers_c.append(nn.Sequential(
+            nn.Conv2d(input_channels, output_channels, 3, padding=1),
+            nn.BatchNorm2d(output_channels),
             nn.ReLU()
-        )
+        ))
 
-        self.layers_c.append(first_layer)
+        input_channels = output_channels
 
         for _ in range(num_layers):
-            output_channels *= 2
+
+            output_channels = input_channels * 2
 
             for __ in range(blocksize):
 
-                next_layer = nn.Sequential(
-                    nn.Conv2d(
-                        in_channels=input_channels,
-                        out_channels=output_channels,
-                        kernel_size=3,
-                        padding=1,
-                    ),
+                layer = nn.Sequential(
+                    nn.Conv2d(input_channels, output_channels, 3, padding=1),
                     nn.BatchNorm2d(output_channels),
                     nn.ReLU()
                 )
 
-                self.layers_c.append(next_layer)
+                self.layers_c.append(layer)
 
-                input_channels = output_channels
-                pass
-            
-            next_layer = nn.Sequential(
-                    nn.Conv2d(
-                        in_channels=input_channels,
-                        out_channels=output_channels,
-                        kernel_size=3,
-                        padding=1,
-                    ),
-                    nn.BatchNorm2d(output_channels),
-                    nn.ReLU(),
-                    nn.Dropout2d(p=DROPOUT)
-                )
-            
-            input_channels = output_channels
-
-        self.layers_c.append(next_layer)
+                input_channels = output_channels  # 🔥 MUST be here
 
     # DONE - build fully connected layer sequence
     def createFCLayers(self, num_classes, num_neurons, num_layers):
         new_img_size = self.fetchNewImgDim(self.img_dim)
+        print("Flatten size:", self.fetchNewImgDim(self.img_dim))
 
         next_layer = nn.Sequential(
             nn.Linear(
@@ -273,8 +253,7 @@ class CNN(nn.Module):
             nn.Linear(
                 num_neurons,
                 num_classes
-            ),
-            nn.ReLU()
+            )
         )
         self.layers_fc.append(next_layer)
         # test
@@ -286,22 +265,23 @@ class CNN(nn.Module):
     
     # DONE - compute flattened feature dimension for classifier input
     def fetchNewImgDim(self, img_dim):
+
         self.eval()
-
         with torch.no_grad():
-            temp_img = torch.zeros(1, 3, img_dim, img_dim)
 
-            for i in range(len(self.layers_c)):
-                temp_img = self.layers_c[i](temp_img)
+            x = torch.zeros(1, 3, img_dim, img_dim)
 
-                if i % self.c_blocksize == 0:
-                    temp_img = self.pool(temp_img)
+            for i, layer in enumerate(self.layers_c):
 
-            _features = temp_img.view(1, -1).shape[1]
+                x = layer(x)   # 🔥 THIS WAS MISSING
 
-            self.train()
-            return _features 
+                if self.c_blocksize > 0 and (i + 1) % self.c_blocksize == 0:
+                    x = self.pool(x)
 
+            features = x.view(1, -1).shape[1]
+
+        self.train()
+        return features
     # DONE - forward pass through the CNN model
     def forward(self, ins):
         out = ins
@@ -466,7 +446,7 @@ if __name__ == "__main__":
     # CNN 2, 8, 16 and 32 layers
 
     cn_learning_rate = SM_LEARNING_RATE
-    cn_num_train_workers = 2
+    cn_num_train_workers = 0
     cn_num_test_workers = 0
     cn_learning_rate = 0.001
     cn_batch_size = 128
