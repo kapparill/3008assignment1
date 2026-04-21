@@ -5,328 +5,529 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 import numpy as np
 from visualization import TrainingVisualizer
+import time
 import os
+import random
+from datetime import datetime
+import warnings
 
-# consts
-SEED = 0 # set seed for assignment
-BATCH_SIZE = 128
-LEARNING_RATE = 0.01
-EPOCHS = 10
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # mps not working, so this is slow
+warnings.filterwarnings('ignore')
+
+os.makedirs("output_data", exist_ok=True)
+
+# RUNTIME CONSTS
+SEED = 250904
+
+IMG_SIZE = 32
+SM_BATCH_SIZE = 64
+OUTPUTS = 10
+EPOCHS = 20
+SM_LEARNING_RATE = 0.001
 NUM_CLASSES = 10
-CHECKPOINT_DIR = './checkpoints'
-os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-torch.manual_seed(SEED)
+DROPOUT = 0.1
 
-# data prep
-def load_cifar10_data(batch_size=BATCH_SIZE):
-    # cifar10 noramlisation
-    mean = (0.4914, 0.4822, 0.4465)
-    std = (0.2023, 0.1994, 0.2010)
-    
-    train_transform = transforms.Compose([
-        # transforms.RandomCrop(32, padding=4),
-        # transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std)
-    ])
-    
-    # noramlisation
-    test_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std)
-    ])
-    
-    # download datasets or use existing
-    train_dataset = datasets.CIFAR10(
-        root='./data', 
-        train=True, 
-        transform=train_transform, 
-        download=True
-    )
-    
-    test_dataset = datasets.CIFAR10(
-        root='./data', 
-        train=False, 
-        transform=test_transform, 
-        download=True
-    )
-    
-    # Create dataloaders
-    train_loader = DataLoader(
-        train_dataset, 
-        batch_size=batch_size, 
-        shuffle=True, 
-        num_workers=0 # 2 slow??
-    )
-    
-    test_loader = DataLoader(
-        test_dataset, 
-        batch_size=batch_size, 
-        shuffle=False, 
-        num_workers=0
-    )
-    
-    return train_loader, test_loader
+NUM_CHANNELS = 3 # rgb
+SM_NUM_TRAIN_WORKERS = 4
+SM_NUM_TEST_WORKERS = 2
+
+C_IN_CHANNELS = 8
+C_OUT_CHANNELS = 8
+
+run_time = time.time()
+DATETIME_STR = datetime.now().strftime("%Y%m%d-%H%M%S")
+OUTPUT_FILE = os.path.join("output_data", f"out_{DATETIME_STR}.txt")
+
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.deterministic = True
+
+data_train = datasets.CIFAR10(
+    root='./data',
+    train=True,
+    download=True,
+    transform=transforms.ToTensor()
+)
+
+data_test = datasets.CIFAR10(
+    root='./data',
+    train=False,
+    download=True,
+    transform=transforms.ToTensor()
+)
+
+# same seed for all generators
+rng = torch.Generator().manual_seed(SEED)
+torch.cuda.manual_seed(seed=SEED)
+torch.manual_seed(seed=SEED)
+np.random.seed(seed=SEED)
+random.seed(SEED)
+
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
+
+print(f"Using device: {device}")
 
 
-# SOFTMAX REGRESSION:
-class SoftmaxRegression(nn.Module):
-    """Linear classifier with softmax activation"""
-    
-    def __init__(self, num_classes=10):
-        super(SoftmaxRegression, self).__init__()
-        # Flatten 32x32x3 images to 3072-dimensional vectors
-        self.fc = nn.Linear(32 * 32 * 3, num_classes)
-    
-    def forward(self, x):
-        x = x.view(x.size(0), -1)  # Flatten
-        x = self.fc(x)
-        return x
+# DONE - softmax portion model class
+class SoftMax(nn.Module):
+    def __init__(self, img_dim: int, num_classes: int):
+        super().__init__()
+        self.flatten = nn.Flatten()
+        self.linear_stack = nn.Sequential(
+            nn.Linear(img_dim * img_dim * 3, num_classes),
+        )
+
+    def forward(self, ins):
+        out = self.flatten(ins)
+        out = self.linear_stack(out)
+        return out
 
 
-# 2 layer CNN:
-class CNN2Layer(nn.Module):
-    def __init__(self, num_classes=10):
-        super(CNN2Layer, self).__init__()
-        
-        self.features = nn.Sequential(
-            # Layer 1: Conv -> BatchNorm -> ReLU -> Pool
-            nn.Conv2d(3, 16, kernel_size=3, padding=1), # Reduced channels from 32 to 16 for speed
-            nn.BatchNorm2d(16), 
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2), # 32x32 -> 16x16
+# DONE - softmax trainer tester class
+class SoftMaxTest():
+    def __init__(self, model, output_file="training.log"):
+        self.model = model.to(device)
+        self.output_file = output_file
+
+    def seed_worker(self, worker_id):
+        worker_seed = torch.initial_seed() % 2**32
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+        return worker_seed
+
+    def dataLoader(self, dataset, batchSize, numWorkers, shuffle=False):
+        loader_args = {
+            "dataset": dataset,
+            "batch_size": batchSize,
+            "num_workers": numWorkers,
+            "worker_init_fn": self.seed_worker,
+            "generator": rng,
+            "persistent_workers": numWorkers > 0,
+        }
+        if shuffle:
+            loader_args["shuffle"] = True
+        return DataLoader(**loader_args)
+
+    def saveResults(self, values, training=False):
+        with open(self.output_file, "a") as f:
+            if training:
+                epoch, step, loss = values
+                f.write(f"Epoch {epoch + 1}, Step {step}, Loss: {loss:.4f}\n")
+            else:
+                avg_loss, accuracy = values
+                f.write(f"Test Loss: {avg_loss:.4f}, Accuracy: {accuracy*100:.2f}%\n")
+
+    def getLoss(self, logits, lbls):
+        return nn.CrossEntropyLoss()(logits, lbls)
+
+    def getAccuracy(self, logits, lbls):
+        outputs = torch.softmax(logits, dim=1)
+        _, predicted = torch.max(outputs, 1)
+        return (predicted == lbls).sum().item()
+
+    def train(self, trainData, epochs, batchSize, numWorkers, optimizer, criterion):
+        self.model.train()
+        data_loader = self.dataLoader(trainData, batchSize, numWorkers, shuffle=True)
+
+        for epoch in range(epochs):
+            running_loss = 0.0
+            for i, (inputs, lbls) in enumerate(data_loader, 1):
+                inputs, lbls = inputs.to(device), lbls.to(device)
+                optimizer.zero_grad()
+
+                logits = self.model(inputs)
+                loss = criterion(logits, lbls)
+                loss.backward()
+                optimizer.step()
+
+                running_loss += loss.item()
+                if i % 100 == 0:
+                    self.saveResults([epoch, i, running_loss / 100], training=True)
+                    print(f"[{epoch + 1}, {i:5d}] loss: {running_loss / 100:.3f}")
+                    running_loss = 0.0
+
+        print("Finished Training")
+
+    def test(self, testData, batchSize, numWorkers, criterion=None):
+        self.model.eval()
+        if criterion is None:
+            criterion = nn.CrossEntropyLoss()
+
+        data_loader = self.dataLoader(testData, batchSize, numWorkers)
+        total_loss = 0.0
+        correct = 0
+        samples = 0
+
+        with torch.no_grad():
+            for inputs, lbls in data_loader:
+                inputs, lbls = inputs.to(device), lbls.to(device)
+                logits = self.model(inputs)
+                total_loss += criterion(logits, lbls).item() * lbls.size(0)
+                correct += self.getAccuracy(logits, lbls)
+                samples += lbls.size(0)
+
+        loss_avg = total_loss / samples if samples else 0.0
+        accuracy = correct / samples if samples else 0.0
+        self.saveResults([loss_avg, accuracy], training=False)
+        print(f"Test Loss: {loss_avg:.4f} | Test Accuracy: {accuracy*100:.2f}%")
+        return loss_avg, accuracy
+
+
+# DONE - CNN model portion class
+class CNN(nn.Module):
+    # DONE - initialize CNN and configure its layers
+    def __init__(
+            self, img_dim: int, num_classes: int, num_c_layers: int, c_blocksize: int, num_fc_layers: int, num_fc_neurons: int
+            ):
+        super().__init__()
+
+        self.c_blocksize = c_blocksize
+        self.img_dim = img_dim
+
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.layers_c = nn.ModuleList()
+        self.layers_fc = nn.ModuleList()
+        self.createLayers(num_c_layers, c_blocksize, num_fc_layers, num_fc_neurons, num_classes)
+    
+    # DONE - build convolutional layer blocks
+    def createCLayers(self, num_layers, blocksize):
+        block_iter = 0
+
+        output_channels = input_channels = 8
+
+        first_layer = nn.Sequential(
+            nn.Conv2d(
+                in_channels=3,
+                out_channels=C_OUT_CHANNELS,
+                kernel_size=3,
+                padding=1
+            ),
+            nn.BatchNorm2d(C_OUT_CHANNELS),
+            nn.ReLU()
+        )
+
+        self.layers_c.append(first_layer)
+
+        blocks = 0
+        for i in range(num_layers):
+            for j in range(blocksize):
+                blocks += 1
+
+                output_channels *= 2
+
+                next_layer = nn.Sequential(
+                    nn.Conv2d(
+                        in_channels=input_channels,
+                        out_channels=output_channels,
+                        kernel_size=3,
+                        padding=1,
+                    ),
+                    nn.BatchNorm2d(output_channels),
+                    nn.ReLU()
+                )
+
+                self.layers_c.append(next_layer)
+
+                input_channels = output_channels
             
-            # Layer 2: Conv -> BatchNorm -> ReLU -> Pool
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2), # 16x16 -> 8x8
+            next_layer = nn.Sequential(
+                    nn.Conv2d(
+                        in_channels=input_channels,
+                        out_channels=output_channels,
+                        kernel_size=3,
+                        padding=1,
+                    ),
+                    nn.BatchNorm2d(output_channels),
+                    nn.ReLU(),
+                    nn.Dropout2d(p=DROPOUT)
+                )
+            
+            input_channels = output_channels
+
+        self.layers_c.append(next_layer)
+
+    # DONE - build fully connected layer sequence
+    def createFCLayers(self, num_classes, num_neurons, num_layers):
+        new_img_size = self.fetchNewImgDim(self.img_dim)
+
+        next_layer = nn.Sequential(
+            nn.Linear(
+                new_img_size,
+                num_neurons
+            ),
+            nn.ReLU()
         )
+        self.layers_fc.append(next_layer)
         
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(32 * 8 * 8, 128),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.3), # Lower dropout for a smaller model
-            nn.Linear(128, num_classes)
+        for i in range(num_layers):
+            
+            next_layer = nn.Sequential(
+                nn.Linear(
+                    num_neurons,
+                    num_neurons
+                ),
+                nn.ReLU()
+            )
+            self.layers_fc.append(next_layer)
+        
+        next_layer = nn.Sequential(
+            nn.Linear(
+                num_neurons,
+                num_classes
+            ),
+            nn.ReLU()
+        )
+        self.layers_fc.append(next_layer)
+        # test
+    
+    # DONE - assemble convolutional and fully connected layers
+    def createLayers(self, num_c_layers, c_blocksize, num_fc_layers, num_fc_neurons, num_classes):
+        self.createCLayers(num_c_layers, c_blocksize)
+        self.createFCLayers(num_classes, num_fc_layers, num_fc_neurons)
+    
+    # DONE - compute flattened feature dimension for classifier input
+    def fetchNewImgDim(self, img_dim):
+        self.eval()
+
+        with torch.no_grad():
+            temp_img = torch.zeros(1, 3, img_dim, img_dim)
+
+            for i in range(len(self.layers_c)):
+                temp_img = self.layers_c[i](temp_img)
+
+                if i % self.c_blocksize == 0:
+                    temp_img = self.pool(temp_img)
+
+            _features = temp_img.view(1, -1).shape[1]
+
+            self.train()
+            return _features 
+
+    # DONE - forward pass through the CNN model
+    def forward(self, ins):
+        out = ins
+
+        for i, cLayer in enumerate(self.layers_c):
+            out = cLayer(out)
+
+            if (i + 1) % self.c_blocksize == 0:
+                out = self.pool(out)
+
+        out = torch.flatten(out, 1)  # flatten all dimensions except batch
+
+        for fcLayer in self.layers_fc[:-1]:
+            out = fcLayer(out)
+
+        out = self.layers_fc[-1](out)
+
+        return out
+
+
+# DONE - helper class for training and testing the CNN
+class CNNTrainer():
+    # DONE - initialize with model and output file
+    def __init__(self, model, output_file="training.log"):
+        self.model = model.to(device)
+        self.output_file = output_file
+
+    # DONE - initialize deterministic worker rng
+    def seed_worker(self, worker_id):
+        worker_seed = torch.initial_seed() % 2**32
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+        return worker_seed
+
+    # DONE - create a pytorch dataloader
+    def dataLoader(self, dataset, batchSize, numWorkers, shuffle=False):
+        loader_args = {
+            "dataset": dataset,
+            "batch_size": batchSize,
+            "num_workers": numWorkers,
+            "worker_init_fn": self.seed_worker,
+            "generator": rng,
+            "persistent_workers": numWorkers > 0,
+        }
+        if shuffle:
+            loader_args["shuffle"] = True
+        return DataLoader(**loader_args)
+
+    # DONE - append training or testing results
+    def saveResults(self, values, training=False):
+        with open(self.output_file, "a") as f:
+            if training:
+                epoch, step, loss = values
+                f.write(f"Epoch {epoch + 1}, Step {step}, Loss: {loss:.4f}\n")
+            else:
+                avg_loss, accuracy = values
+                f.write(f"Test Loss: {avg_loss:.4f}, Accuracy: {accuracy*100:.2f}%\n")
+
+    # DONE - calculate CEL
+    def getLoss(self, logits, lbls):
+        return nn.CrossEntropyLoss()(logits, lbls)
+
+    # DONE - acc soft
+    def getAccuracy(self, logits, lbls):
+        outputs = torch.softmax(logits, dim=1)
+        _, predicted = torch.max(outputs, 1)
+        return (predicted == lbls).sum().item()
+
+    # DONE - train the model over a dataset
+    def train(self, trainData, epochs, batchSize, numWorkers, optimizer, criterion):
+        self.model.train()
+        data_loader = self.dataLoader(trainData, batchSize, numWorkers, shuffle=True)
+
+        running_loss = 0.0
+        for epoch in range(epochs):
+            for i, (inputs, labels) in enumerate(data_loader, 1):
+                inputs, labels = inputs.to(device), labels.to(device)
+                optimizer.zero_grad()
+
+                logits = self.model(inputs)
+                loss = criterion(logits, labels)
+                loss.backward()
+                optimizer.step()
+
+                running_loss += loss.item()
+                if i % 100 == 0:
+                    self.saveResults([epoch, i, running_loss / 100], training=True)
+                    print(f"[{epoch + 1}, {i:5d}] loss: {running_loss / 100:.3f}")
+                    running_loss = 0.0
+
+        print("Finished training.")
+
+    # DONE - evaluate the model on test data
+    def test(self, testData, batchSize, numWorkers, criterion=None):
+        self.model.eval()
+        if criterion is None:
+            criterion = nn.CrossEntropyLoss()
+        
+        correct = 0
+        samples = 0
+
+        data_loader = self.dataLoader(testData, batchSize, numWorkers)
+        loss_total = 0.0
+
+        with torch.no_grad():
+            for inputs, lbls in data_loader:
+                inputs, lbls = inputs.to(device), lbls.to(device)
+                logits = self.model(inputs)
+                loss_total += criterion(logits, lbls).item() * lbls.size(0)
+                correct += self.getAccuracy(logits, lbls)
+                samples += lbls.size(0)
+
+        loss_avg = loss_total / samples if samples else 0.0
+        accuracy = correct / samples if samples else 0.0
+        self.saveResults([loss_avg, accuracy], training=False)
+        print(f"Testing Loss: {loss_avg:.4f} | Testing Accuracy: {accuracy*100:.2f}%")
+        return loss_avg, accuracy
+
+
+if __name__ == "__main__":
+    # SOFTMAX
+
+    print("--- SoftMax and CNN model and testing ---\n")
+
+    with open(OUTPUT_FILE, "a") as f:
+        f.write(
+            f"----- PARAMETERS -----\n" \
+            f"EPOCHS           : {EPOCHS}\n" \
+            f"SM_BATCH_SIZE    : {SM_BATCH_SIZE}\n" \
+            f"DROPOUT          : {DROPOUT}\n" \
+            f"SM_LEARNING_RATE : {SM_LEARNING_RATE}\n" \
+            f"NUM_CLASSES      : {NUM_CLASSES}\n"
+            f"----------------------\n\n"
         )
     
-    def forward(self, x):
-        x = self.features(x)
-        x = self.classifier(x)
-        return x
+    print(" - Training SoftMax...\n")
+    
+    softmax_model = SoftMax(IMG_SIZE, NUM_CLASSES)
+    softmax_test = SoftMaxTest(softmax_model)
+    softmax_optimiser = torch.optim.Adam(softmax_model.parameters(), SM_LEARNING_RATE)
+    softmax_criterion = nn.CrossEntropyLoss()
 
+    softmax_test.train(data_train, EPOCHS, SM_BATCH_SIZE, SM_NUM_TRAIN_WORKERS, softmax_optimiser, softmax_criterion)
+    sm_loss_test, sm_accuracy_test = softmax_test.test(data_test, SM_BATCH_SIZE, SM_NUM_TEST_WORKERS)
 
-# Helper to create a block of Conv + BatchNorm + ReLU
-def conv_bn_relu(in_f, out_f):
-    return nn.Sequential(
-        nn.Conv2d(in_f, out_f, kernel_size=3, padding=1),
-        nn.BatchNorm2d(out_f),
-        nn.ReLU(inplace=True)
-    )
+    out_buffer = f"----- SoftMax Training Results -----\n" \
+            f"Epochs completed : {EPOCHS}\n\n" \
+            f"Batch size       : {SM_BATCH_SIZE}\n" \
+            f"Learning rate    : {SM_LEARNING_RATE}\n" \
+            f"Dropout          : {DROPOUT}\n" \
+            f"- COMPLETE -\n" \
+            f"Test loss        : {sm_loss_test}\n" \
+            f"Test accuracy    : {sm_accuracy_test} ({(sm_accuracy_test*100):.2f}%)\n" \
+            f"-----------------------------------\n\n"
 
-class CNN_8Layer(nn.Module):
-    def __init__(self, num_classes=10):
-        super(CNN_8Layer, self).__init__()
-        # 8 Conv layers total, 2 per pool block
-        self.features = nn.Sequential(
-            conv_bn_relu(3, 16), conv_bn_relu(16, 16), nn.MaxPool2d(2, 2), # 16x16
-            conv_bn_relu(16, 32), conv_bn_relu(32, 32), nn.MaxPool2d(2, 2), # 8x8
-            conv_bn_relu(32, 32), conv_bn_relu(32, 32), nn.MaxPool2d(2, 2), # 4x4
-            conv_bn_relu(32, 32), conv_bn_relu(32, 32), nn.MaxPool2d(2, 2)  # 2x2
+    with open(OUTPUT_FILE, "a") as f:
+        f.write(
+            out_buffer
         )
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(32 * 2 * 2, 64), # Reduced from 512 to 64 for CPU speed
-            nn.ReLU(inplace=True),
-            nn.Linear(64, num_classes)
-        )
+    
+    print(out_buffer)
 
-    def forward(self, x):
-        return self.classifier(self.features(x))
+    # CNN 2, 8, 16 and 32 layers
 
-class CNN_16Layer(nn.Module):
-    def __init__(self, num_classes=10):
-        super(CNN_16Layer, self).__init__()
-        # 16 Conv layers total, 4 per pool block
-        def layer_block(in_f, out_f):
-            return nn.Sequential(
-                conv_bn_relu(in_f, out_f), conv_bn_relu(out_f, out_f),
-                conv_bn_relu(out_f, out_f), conv_bn_relu(out_f, out_f),
-                nn.MaxPool2d(2, 2)
+    cn_learning_rate = SM_LEARNING_RATE
+    cn_num_train_workers = 2
+    cn_num_test_workers = 0
+    cn_learning_rate = 0.001
+    cn_batch_size = 128
+
+    for i in range(1, 6):
+        if i == 2: # skip i^2==4 layer
+            continue
+        num_c_layers = pow(2, i)
+        c_blocksize = 8
+        num_fc_layers = 4
+        num_fc_neurons = 128
+
+        with open(OUTPUT_FILE, "a") as f:
+            f.write(
+                f"----- PARAMETERS -----\n" \
+                f"num_c_layers   : {num_c_layers}\n" \
+                f"c_blocksize    : {c_blocksize}\n" \
+                f"num_fc_layers  : {num_fc_layers}\n" \
+                f"num_fc_neurons : {num_fc_neurons}\n" \
+                f"----------------------"
             )
         
-        self.features = nn.Sequential(
-            layer_block(3, 16), layer_block(16, 16),
-            layer_block(16, 32), layer_block(32, 32)
+        print(f" - Training CNN... ({num_c_layers} layers)")
+
+        cn_model = CNN(
+            IMG_SIZE,
+            NUM_CLASSES,
+            num_c_layers,
+            c_blocksize,
+            num_fc_layers,
+            num_fc_neurons
         )
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(32 * 2 * 2, 64),
-            nn.ReLU(inplace=True),
-            nn.Linear(64, num_classes)
-        )
-
-    def forward(self, x):
-        return self.classifier(self.features(x))
-
-
-class CNN_32Layer(nn.Module):
-    def __init__(self, num_classes=10):
-        super(CNN_32Layer, self).__init__()
-        # 32 Conv layers total, 8 per pool block
-        def deep_block(in_f, out_f):
-            layers = [conv_bn_relu(in_f, out_f)]
-            for _ in range(7):
-                layers.append(conv_bn_relu(out_f, out_f))
-            layers.append(nn.MaxPool2d(2, 2))
-            return nn.Sequential(*layers)
-
-        self.features = nn.Sequential(
-            deep_block(3, 16), deep_block(16, 16),
-            deep_block(16, 32), deep_block(32, 32)
-        )
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(32 * 2 * 2, 64),
-            nn.ReLU(inplace=True),
-            nn.Linear(64, num_classes)
+        cn_trainer = CNNTrainer(cn_model)
+        cn_criterion = nn.CrossEntropyLoss()
+        cn_optimiser = optim.SGD(
+            cn_model.parameters(), cn_learning_rate, momentum=0.75, weight_decay=0.0001
+            )
+        
+        cn_trainer.train(
+            data_train,
+            EPOCHS,
+            cn_batch_size,
+            cn_num_train_workers,
+            cn_optimiser,
+            cn_criterion
         )
 
-    def forward(self, x):
-        return self.classifier(self.features(x))
+        cn_loss_test, cn_accuracy_test = cn_trainer.test(data_test, cn_batch_size, cn_num_test_workers)
 
-        
-# training and eval functions
-
-def train_epoch(model, train_loader, criterion, optimizer, device):
-    """Train for one epoch"""
-    model.train()
-    total_loss = 0
-    correct = 0
-    total = 0
-    
-    for batch_idx, (inputs, labels) in enumerate(train_loader):
-        inputs, labels = inputs.to(device), labels.to(device)
-        
-        # Forward pass
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-        
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        # Statistics
-        total_loss += loss.item()
-        _, predicted = torch.max(outputs.data, 1)
-        correct += (predicted == labels).sum().item()
-        total += labels.size(0)
-        
-        # Print progress
-        if (batch_idx + 1) % 100 == 0:
-            print(f"  Batch {batch_idx + 1}/{len(train_loader)}")
-    
-    avg_loss = total_loss / len(train_loader)
-    accuracy = 100 * correct / total
-    return avg_loss, accuracy
-
-
-def evaluate(model, test_loader, criterion, device):
-    model.eval()
-    total_loss = 0
-    correct = 0
-    total = 0
-    
-    with torch.no_grad():
-        for batch_idx, (inputs, labels) in enumerate(test_loader):
-            inputs, labels = inputs.to(device), labels.to(device)
-            
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            
-            total_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            correct += (predicted == labels).sum().item()
-            total += labels.size(0)
-            
-            # Print progress
-            if (batch_idx + 1) % 100 == 0:
-                print(f"  Batch {batch_idx + 1}/{len(test_loader)}")
-    
-    avg_loss = total_loss / len(test_loader)
-    accuracy = 100 * correct / total
-    return avg_loss, accuracy
-
-
-def train_model(model, train_loader, test_loader, epochs=EPOCHS, lr=LEARNING_RATE):
-    # training model
-
-    # visualiser in custom library init
-    viz = TrainingVisualizer()
-    
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-    
-    best_accuracy = 0
-    
-    for epoch in range(epochs):
-        train_loss, train_acc = train_epoch(
-            model, train_loader, criterion, optimizer, DEVICE
-        )
-        
-        test_loss, test_acc = evaluate(model, test_loader, criterion, DEVICE)
-        
-        scheduler.step()
-        
-        print(f"Epoch {epoch+1}/{epochs}")
-        print(f"  Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
-        print(f"  Test Loss:  {test_loss:.4f}, Test Acc:  {test_acc:.2f}%")
-        
-        # Save best model
-        if test_acc > best_accuracy:
-            best_accuracy = test_acc
-            checkpoint_path = os.path.join(CHECKPOINT_DIR, f'{model.__class__.__name__}_best.pt')
-            torch.save(model.state_dict(), checkpoint_path)
-            print(f"  ✓ Saved best model to {checkpoint_path}")
-        print()
-
-        # add the epoch results to the visualisation
-        viz.add_epoch(epoch+1, train_loss, train_acc, test_loss, test_acc)
-
-    viz.save_history()
-    viz.print_summary()
-    viz.plot_all()
-    
-    return best_accuracy
-
-
-# =
-# main
-# =
-if __name__ == '__main__':
-    print(f"Using device: {DEVICE}\n")
-    train_loader, test_loader = load_cifar10_data(BATCH_SIZE)
-    
-    model_list = [
-        # SoftmaxRegression, 
-        # SimpleCNN,   # 2-Layer
-        CNN_8Layer, 
-        CNN_16Layer, 
-        CNN_32Layer
-    ]
-    
-    for model_class in model_list:
-        print("=" * 60)
-        print(f"TRAINING: {model_class.__name__}")
-        print("=" * 60)
-        
-        model = model_class(NUM_CLASSES).to(DEVICE)
-        param_count = sum(p.numel() for p in model.parameters())
-        print(f"Model parameters: {param_count:,}")
-        
-        best_acc = train_model(model, train_loader, test_loader)
-        print(f"Final Best Accuracy for {model_class.__name__}: {best_acc:.2f}%\n")
+        with open(OUTPUT_FILE, "a") as f:
+            f.write(
+                f"----- CNN training results -----\n" \
+                f"Number of convolutional : {num_c_layers}\n" \
+                f"          layers \n" \
+                f"Epochs completed        : {EPOCHS}\n\n" \
+                f"Batch size              : {cn_batch_size}\n" \
+                f"Learning rate           : {cn_learning_rate}\n" \
+                f"- COMPLETE -\n" \
+                f"Test loss               : {cn_loss_test}\n" \
+                f"Test accuracy           : {cn_accuracy_test} ({(cn_accuracy_test*100):.2f}%)\n" \
+                f"-----------------------------------\n\n"
+            )
