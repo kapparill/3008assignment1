@@ -213,20 +213,20 @@ class CNN(nn.Module):
 
             for __ in range(blocksize):
 
-                # next_layer = nn.Sequential(
-                #     nn.Conv2d(
-                #         in_channels=input_channels,
-                #         out_channels=output_channels,
-                #         kernel_size=3,
-                #         padding=1,
-                #     ),
-                #     nn.BatchNorm2d(output_channels),
-                #     nn.ReLU()
-                # )
+                next_layer = nn.Sequential(
+                    nn.Conv2d(
+                        in_channels=input_channels,
+                        out_channels=output_channels,
+                        kernel_size=3,
+                        padding=1,
+                    ),
+                    nn.BatchNorm2d(output_channels),
+                    nn.ReLU()
+                )
 
-                # self.layers_c.append(next_layer)
+                self.layers_c.append(next_layer)
 
-                # input_channels = output_channels
+                input_channels = output_channels
                 pass
             
             next_layer = nn.Sequential(
