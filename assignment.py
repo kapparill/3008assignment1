@@ -24,7 +24,7 @@ OUTPUTS = 10
 EPOCHS = 20
 SM_LEARNING_RATE = 0.001
 NUM_CLASSES = 10
-DROPOUT = 0.1
+DROPOUT = 0.001
 
 NUM_CHANNELS = 3 # rgb
 SM_NUM_TRAIN_WORKERS = 4
@@ -227,7 +227,6 @@ class CNN(nn.Module):
     # DONE - build fully connected layer sequence
     def createFCLayers(self, num_classes, num_neurons, num_layers):
         new_img_size = self.fetchNewImgDim(self.img_dim)
-        print("Flatten size:", self.fetchNewImgDim(self.img_dim))
 
         next_layer = nn.Sequential(
             nn.Linear(
@@ -262,6 +261,9 @@ class CNN(nn.Module):
     def createLayers(self, num_c_layers, c_blocksize, num_fc_layers, num_fc_neurons, num_classes):
         self.createCLayers(num_c_layers, c_blocksize)
         self.createFCLayers(num_classes, num_fc_layers, num_fc_neurons)
+
+        num_features = self.fetchNewImgDim(32)
+        self.fc_norm = nn.LayerNorm(num_features)
     
     # DONE - compute flattened feature dimension for classifier input
     def fetchNewImgDim(self, img_dim):
@@ -283,23 +285,21 @@ class CNN(nn.Module):
         self.train()
         return features
     # DONE - forward pass through the CNN model
-    def forward(self, ins):
-        out = ins
-
+    def forward(self, x):
         for i, layer_c in enumerate(self.layers_c):
-            out = layer_c(out)
+            x = layer_c(x)
 
             if (i + 1) % self.c_blocksize == 0:
-                out = self.pool(out)
+                x = self.pool(x)
 
-        out = torch.flatten(out, 1)  # flatten all dimensions except batch
+        x = torch.flatten(x, 1) # flatten all dimensions except batch
 
-        for layer_fc in self.layers_fc[:-1]:
-            out = layer_fc(out)
+        for fcLayer in self.layers_fc[:-1]:
+            x = fcLayer(x)
 
-        out = self.layers_fc[-1](out)
+        x = self.layers_fc[-1](x)
 
-        return out
+        return x
 
 
 # DONE - helper class for training and testing the CNN
@@ -342,37 +342,71 @@ class CNNTrainer():
 
     # DONE - calculate CEL
     def getLoss(self, logits, lbls):
-        return nn.CrossEntropyLoss()(logits, lbls)
+        lossFunc = nn.CrossEntropyLoss()
+        loss = lossFunc(logits, lbls)
+        return loss
 
     # DONE - acc soft
     def getAccuracy(self, logits, lbls):
-        outputs = torch.softmax(logits, dim=1)
-        _, predicted = torch.max(outputs, 1)
+        _, predicted = torch.max(logits, 1)
         return (predicted == lbls).sum().item()
 
     # DONE - train the model over a dataset
-    def train(self, trainData, epochs, batchSize, numWorkers, optimizer, criterion):
-        self.model.train()
-        data_loader = self.dataLoader(trainData, batchSize, numWorkers, shuffle=True)
+    # def train(self, trainData, epochs, batchSize, numWorkers, optimizer, criterion):
+        
+    #     self.model.train()
+    #     optimizer.zero_grad()
+    #     data_loader = self.dataLoader(trainData, batchSize, numWorkers, shuffle=True)
 
-        running_loss = 0.0
-        for epoch in range(epochs):
-            for i, (inputs, labels) in enumerate(data_loader, 1):
+    #     running_loss = 0.0
+    #     for epoch in range(epochs):
+    #         for i, (inputs, labels) in enumerate(data_loader, 1):
+    #             inputs, labels = inputs.to(device), labels.to(device)
+                
+
+    #             logits = self.model(inputs)
+
+    #             loss = self.getLoss(logits, labels)
+    #             loss.backward()
+    #             optimizer.step()
+
+    #             running_loss += loss.item()
+    #             if i % 100 == 0:
+    #                 self.saveResults([epoch, i, running_loss / 100], training=True)
+    #                 print(f"[{epoch + 1}, {i:5d}] loss: {running_loss / 100:.3f}")
+    #                 running_loss = 0.0
+
+    #     print("Finished training.")
+
+    def train(self, trainData, epochs, batchSize, trainNumWorkers, optimizer, criterion):
+
+        dataLoader = self.dataLoader(trainData, batchSize, trainNumWorkers)
+
+        for epoch in range(epochs): 
+            running_loss = 0.0
+            for i, data in enumerate(dataLoader, 0):
+                
+                inputs, labels = data
                 inputs, labels = inputs.to(device), labels.to(device)
+
+                
                 optimizer.zero_grad()
 
-                logits = self.model(inputs)
-                loss = criterion(logits, labels)
+                
+                outputs = self.model(inputs)
+                loss = criterion(outputs, labels)
                 loss.backward()
                 optimizer.step()
 
+                
                 running_loss += loss.item()
-                if i % 100 == 0:
-                    self.saveResults([epoch, i, running_loss / 100], training=True)
-                    print(f"[{epoch + 1}, {i:5d}] loss: {running_loss / 100:.3f}")
+                if i % 100 == 99:    # print every 100 mini-batches
+                    data = [epoch, i+1, running_loss/100]
+                    print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 100:.3f}')
                     running_loss = 0.0
 
-        print("Finished training.")
+        print('Finished Training')
+
 
     # DONE - evaluate the model on test data
     def test(self, testData, batchSize, numWorkers, criterion=None):
@@ -448,7 +482,7 @@ if __name__ == "__main__":
     cn_learning_rate = SM_LEARNING_RATE
     cn_num_train_workers = 0
     cn_num_test_workers = 0
-    cn_learning_rate = 0.001
+    cn_learning_rate = 0.01
     cn_batch_size = 128
 
     for i in range(1, 6):
@@ -482,7 +516,7 @@ if __name__ == "__main__":
         cn_trainer = CNNTrainer(cn_model)
         cn_criterion = nn.CrossEntropyLoss()
         cn_optimiser = optim.SGD(
-            cn_model.parameters(), cn_learning_rate, momentum=0.75, weight_decay=0.0001
+            cn_model.parameters(), cn_learning_rate, momentum=0.9, weight_decay=0.0001
             )
         
         cn_trainer.train(
