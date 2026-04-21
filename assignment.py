@@ -84,95 +84,95 @@ class SoftMax(nn.Module):
 
 
 # DONE - softmax trainer tester class
-class SoftMaxTest():
-    def __init__(self, model, output_file="training.log"):
-        self.model = model.to(device)
-        self.output_file = output_file
+# class SoftMaxTest():
+#     def __init__(self, model, output_file="training.log"):
+#         self.model = model.to(device)
+#         self.output_file = output_file
 
-    def seed_worker(self, worker_id):
-        worker_seed = torch.initial_seed() % 2**32
-        np.random.seed(worker_seed)
-        random.seed(worker_seed)
-        return worker_seed
+#     def seed_worker(self, worker_id):
+#         worker_seed = torch.initial_seed() % 2**32
+#         np.random.seed(worker_seed)
+#         random.seed(worker_seed)
+#         return worker_seed
 
-    def dataLoader(self, dataset, batchSize, numWorkers, shuffle=False):
-        loader_args = {
-            "dataset": dataset,
-            "batch_size": batchSize,
-            "num_workers": numWorkers,
-            "worker_init_fn": self.seed_worker,
-            "generator": rng,
-            "persistent_workers": numWorkers > 0,
-        }
-        if shuffle:
-            loader_args["shuffle"] = True
-        return DataLoader(**loader_args)
+#     def dataLoader(self, dataset, batchSize, numWorkers, shuffle=False):
+#         loader_args = {
+#             "dataset": dataset,
+#             "batch_size": batchSize,
+#             "num_workers": numWorkers,
+#             "worker_init_fn": self.seed_worker,
+#             "generator": rng,
+#             "persistent_workers": numWorkers > 0,
+#         }
+#         if shuffle:
+#             loader_args["shuffle"] = True
+#         return DataLoader(**loader_args)
 
-    def saveResults(self, values, training=False):
-        with open(self.output_file, "a") as f:
-            if training:
-                epoch, step, loss = values
-                f.write(f"Epoch {epoch + 1}, Step {step}, Loss: {loss:.4f}\n")
-            else:
-                avg_loss, accuracy = values
-                f.write(f"Test Loss: {avg_loss:.4f}, Accuracy: {accuracy*100:.2f}%\n")
+#     def saveResults(self, values, training=False):
+#         with open(self.output_file, "a") as f:
+#             if training:
+#                 epoch, step, loss = values
+#                 f.write(f"Epoch {epoch + 1}, Step {step}, Loss: {loss:.4f}\n")
+#             else:
+#                 avg_loss, accuracy = values
+#                 f.write(f"Test Loss: {avg_loss:.4f}, Accuracy: {accuracy*100:.2f}%\n")
 
-    def getLoss(self, logits, lbls):
-        return nn.CrossEntropyLoss()(logits, lbls)
+#     def getLoss(self, logits, lbls):
+#         return nn.CrossEntropyLoss()(logits, lbls)
 
-    def getAccuracy(self, logits, lbls):
-        outputs = torch.softmax(logits, dim=1)
-        _, predicted = torch.max(outputs, 1)
-        return (predicted == lbls).sum().item()
+#     def getAccuracy(self, logits, lbls):
+#         outputs = torch.softmax(logits, dim=1)
+#         _, predicted = torch.max(outputs, 1)
+#         return (predicted == lbls).sum().item()
 
-    def train(self, trainData, epochs, batchSize, numWorkers, optimizer, criterion):
-        self.model.train()
-        data_loader = self.dataLoader(trainData, batchSize, numWorkers, shuffle=True)
+#     def train(self, trainData, epochs, batchSize, numWorkers, optimizer, criterion):
+#         self.model.train()
+#         data_loader = self.dataLoader(trainData, batchSize, numWorkers, shuffle=True)
 
-        variable = None
+        # variable = None
 
-        for epoch in range(epochs):
-            running_loss = 0.0
-            for i, (inputs, lbls) in enumerate(data_loader, 1):
-                inputs, lbls = inputs.to(device), lbls.to(device)
-                optimizer.zero_grad()
+        # for epoch in range(epochs):
+        #     running_loss = 0.0
+        #     for i, (inputs, lbls) in enumerate(data_loader, 1):
+        #         inputs, lbls = inputs.to(device), lbls.to(device)
+        #         optimizer.zero_grad()
 
-                logits = self.model(inputs)
-                loss = criterion(logits, lbls)
-                loss.backward()
-                optimizer.step()
+#                 logits = self.model(inputs)
+#                 loss = criterion(logits, lbls)
+#                 loss.backward()
+#                 optimizer.step()
 
-                running_loss += loss.item()
-                if i % 100 == 0:
-                    self.saveResults([epoch, i, running_loss / 100], training=True)
-                    print(f"[{epoch + 1}, {i:5d}] loss: {running_loss / 100:.3f}")
-                    running_loss = 0.0
+#                 running_loss += loss.item()
+#                 if i % 100 == 0:
+#                     self.saveResults([epoch, i, running_loss / 100], training=True)
+#                     print(f"[{epoch + 1}, {i:5d}] loss: {running_loss / 100:.3f}")
+#                     running_loss = 0.0
 
-        print("Finished Training")
+#         print("Finished Training")
 
-    def test(self, testData, batchSize, numWorkers, criterion=None):
-        self.model.eval()
-        if criterion is None:
-            criterion = nn.CrossEntropyLoss()
+#     def test(self, testData, batchSize, numWorkers, criterion=None):
+#         self.model.eval()
+#         if criterion is None:
+#             criterion = nn.CrossEntropyLoss()
 
-        data_loader = self.dataLoader(testData, batchSize, numWorkers)
-        total_loss = 0.0
-        correct = 0
-        samples = 0
+#         data_loader = self.dataLoader(testData, batchSize, numWorkers)
+#         total_loss = 0.0
+#         correct = 0
+#         samples = 0
 
-        with torch.no_grad():
-            for inputs, lbls in data_loader:
-                inputs, lbls = inputs.to(device), lbls.to(device)
-                logits = self.model(inputs)
-                total_loss += criterion(logits, lbls).item() * lbls.size(0)
-                correct += self.getAccuracy(logits, lbls)
-                samples += lbls.size(0)
+#         with torch.no_grad():
+#             for inputs, lbls in data_loader:
+#                 inputs, lbls = inputs.to(device), lbls.to(device)
+#                 logits = self.model(inputs)
+#                 total_loss += criterion(logits, lbls).item() * lbls.size(0)
+#                 correct += self.getAccuracy(logits, lbls)
+#                 samples += lbls.size(0)
 
-        loss_avg = total_loss / samples if samples else 0.0
-        accuracy = correct / samples if samples else 0.0
-        self.saveResults([loss_avg, accuracy], training=False)
-        print(f"Test Loss: {loss_avg:.4f} | Test Accuracy: {accuracy*100:.2f}%")
-        return loss_avg, accuracy
+#         loss_avg = total_loss / samples if samples else 0.0
+#         accuracy = correct / samples if samples else 0.0
+#         self.saveResults([loss_avg, accuracy], training=False)
+#         print(f"Test Loss: {loss_avg:.4f} | Test Accuracy: {accuracy*100:.2f}%")
+#         return loss_avg, accuracy
 
 
 # DONE - CNN model portion class
@@ -439,13 +439,13 @@ if __name__ == "__main__":
     
     print(" - Training SoftMax...\n")
     
-    softmax_model = SoftMax(IMG_SIZE, NUM_CLASSES)
-    softmax_test = SoftMaxTest(softmax_model)
-    softmax_optimiser = torch.optim.Adam(softmax_model.parameters(), SM_LEARNING_RATE)
-    softmax_criterion = nn.CrossEntropyLoss()
+    # softmax_model = SoftMax(IMG_SIZE, NUM_CLASSES)
+    # softmax_test = SoftMaxTest(softmax_model)
+    # softmax_optimiser = torch.optim.Adam(softmax_model.parameters(), SM_LEARNING_RATE)
+    # softmax_criterion = nn.CrossEntropyLoss()
 
-    softmax_test.train(data_train, EPOCHS, SM_BATCH_SIZE, SM_NUM_TRAIN_WORKERS, softmax_optimiser, softmax_criterion)
-    sm_loss_test, sm_accuracy_test = softmax_test.test(data_test, SM_BATCH_SIZE, SM_NUM_TEST_WORKERS)
+    # softmax_test.train(data_train, EPOCHS, SM_BATCH_SIZE, SM_NUM_TRAIN_WORKERS, softmax_optimiser, softmax_criterion)
+    # sm_loss_test, sm_accuracy_test = softmax_test.test(data_test, SM_BATCH_SIZE, SM_NUM_TEST_WORKERS)
 
     out_buffer = f"----- SoftMax Training Results -----\n" \
             f"Epochs completed : {EPOCHS}\n\n" \
@@ -453,9 +453,8 @@ if __name__ == "__main__":
             f"Learning rate    : {SM_LEARNING_RATE}\n" \
             f"Dropout          : {DROPOUT}\n" \
             f"- COMPLETE -\n" \
-            f"Test loss        : {sm_loss_test}\n" \
-            f"Test accuracy    : {sm_accuracy_test} ({(sm_accuracy_test*100):.2f}%)\n" \
-            f"-----------------------------------\n\n"
+            # f"Test loss        : {sm_loss_test}\n" \
+            # f"Test accuracy    : {sm_accuracy_test} ({(sm_accuracy_test*100):.2f}%)\n" \
 
     with open(OUTPUT_FILE, "a") as f:
         f.write(
@@ -476,7 +475,7 @@ if __name__ == "__main__":
         if i == 2: # skip i^2==4 layer
             continue
         num_c_layers = pow(2, i)
-        c_blocksize = 8
+        c_blocksize = 2
         num_fc_layers = 4
         num_fc_neurons = 128
 
