@@ -129,6 +129,8 @@ class SoftMaxTest():
         self.model.train()
         data_loader = self.dataLoader(trainData, batchSize, numWorkers, shuffle=True)
 
+        variable = None
+
         for epoch in range(epochs):
             running_loss = 0.0
             for i, (inputs, lbls) in enumerate(data_loader, 1):
@@ -191,8 +193,6 @@ class CNN(nn.Module):
     
     # DONE - build convolutional layer blocks
     def createCLayers(self, num_layers, blocksize):
-        block_iter = 0
-
         output_channels = input_channels = 8
 
         first_layer = nn.Sequential(
@@ -208,27 +208,26 @@ class CNN(nn.Module):
 
         self.layers_c.append(first_layer)
 
-        blocks = 0
-        for i in range(num_layers):
-            for j in range(blocksize):
-                blocks += 1
+        for _ in range(num_layers):
+            output_channels *= 2
 
-                output_channels *= 2
+            for __ in range(blocksize):
 
-                next_layer = nn.Sequential(
-                    nn.Conv2d(
-                        in_channels=input_channels,
-                        out_channels=output_channels,
-                        kernel_size=3,
-                        padding=1,
-                    ),
-                    nn.BatchNorm2d(output_channels),
-                    nn.ReLU()
-                )
+                # next_layer = nn.Sequential(
+                #     nn.Conv2d(
+                #         in_channels=input_channels,
+                #         out_channels=output_channels,
+                #         kernel_size=3,
+                #         padding=1,
+                #     ),
+                #     nn.BatchNorm2d(output_channels),
+                #     nn.ReLU()
+                # )
 
-                self.layers_c.append(next_layer)
+                # self.layers_c.append(next_layer)
 
-                input_channels = output_channels
+                # input_channels = output_channels
+                pass
             
             next_layer = nn.Sequential(
                     nn.Conv2d(
@@ -259,7 +258,7 @@ class CNN(nn.Module):
         )
         self.layers_fc.append(next_layer)
         
-        for i in range(num_layers):
+        for _ in range(num_layers):
             
             next_layer = nn.Sequential(
                 nn.Linear(
@@ -307,16 +306,16 @@ class CNN(nn.Module):
     def forward(self, ins):
         out = ins
 
-        for i, cLayer in enumerate(self.layers_c):
-            out = cLayer(out)
+        for i, layer_c in enumerate(self.layers_c):
+            out = layer_c(out)
 
             if (i + 1) % self.c_blocksize == 0:
                 out = self.pool(out)
 
         out = torch.flatten(out, 1)  # flatten all dimensions except batch
 
-        for fcLayer in self.layers_fc[:-1]:
-            out = fcLayer(out)
+        for layer_fc in self.layers_fc[:-1]:
+            out = layer_fc(out)
 
         out = self.layers_fc[-1](out)
 
