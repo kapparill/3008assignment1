@@ -208,6 +208,7 @@ class CNN(nn.Module):
 
         input_channels = output_channels
 
+<<<<<<< HEAD
         for _ in range(num_layers):
 
             output_channels = input_channels * 2
@@ -223,6 +224,23 @@ class CNN(nn.Module):
                 self.layers_c.append(layer)
 
                 input_channels = output_channels  # 🔥 MUST be here
+=======
+        # Create num_layers additional layers
+        for i in range(num_layers-1):
+            # Double channels every blocksize layers
+            if blocksize > 0 and i % blocksize == 0 and i > 0:
+                output_channels = input_channels * 2
+            
+            self.layers_c.append(nn.Sequential(
+                nn.Conv2d(input_channels, output_channels, 3, padding=1),
+                nn.BatchNorm2d(output_channels),
+                nn.ReLU()
+            ))
+            
+            input_channels = output_channels
+        
+        print(f"Total convolutional layers created: {len(self.layers_c)}")
+>>>>>>> fd52104 (new working with changed train function)
 
     # DONE - build fully connected layer sequence
     def createFCLayers(self, num_classes, num_neurons, num_layers):
@@ -261,6 +279,7 @@ class CNN(nn.Module):
     def createLayers(self, num_c_layers, c_blocksize, num_fc_layers, num_fc_neurons, num_classes):
         self.createCLayers(num_c_layers, c_blocksize)
         self.createFCLayers(num_classes, num_fc_neurons, num_fc_layers)
+<<<<<<< HEAD
 
         num_features = self.fetchNewImgDim(32)
         self.fc_norm = nn.LayerNorm(num_features)
@@ -286,6 +305,8 @@ class CNN(nn.Module):
         )
         self.layers_fc.append(next_layer)
         # test
+=======
+>>>>>>> fd52104 (new working with changed train function)
     
     # DONE - compute flattened feature dimension for classifier input
     def fetchNewImgDim(self, img_dim):
@@ -297,7 +318,7 @@ class CNN(nn.Module):
 
             for i, layer in enumerate(self.layers_c):
 
-                x = layer(x)   # 🔥 THIS WAS MISSING
+                x = layer(x)
 
                 if self.c_blocksize > 0 and (i + 1) % self.c_blocksize == 0:
                     x = self.pool(x)
@@ -373,18 +394,26 @@ class CNNTrainer():
         return (predicted == lbls).sum().item()
 
     # DONE - train the model over a dataset
+<<<<<<< HEAD
 
     def train(self, trainData, epochs, batchSize, trainNumWorkers, optimizer, criterion):
         self.model.train()
         dataLoader = self.dataLoader(trainData, batchSize, trainNumWorkers)
 
         for epoch in range(epochs): 
-            running_loss = 0.0
-            for i, data in enumerate(dataLoader, 0):
-                
-                inputs, labels = data
-                inputs, labels = inputs.to(device), labels.to(device)
+=======
+    def train(self, train_data, epochs, batch_size, num_workers, optimizer, criterion):
+        self.model.train()
+        data_loader = self.dataLoader(train_data, batch_size, num_workers, shuffle=True)
 
+        for epoch in range(epochs):
+>>>>>>> fd52104 (new working with changed train function)
+            running_loss = 0.0
+            for i, (inputs, labels) in enumerate(data_loader, 1):
+                inputs, labels = inputs.to(device), labels.to(device)
+                optimizer.zero_grad()
+
+<<<<<<< HEAD
                 optimizer.zero_grad()
 
                 outputs = self.model(inputs)
@@ -402,26 +431,39 @@ class CNNTrainer():
 
         print('Finished Training')
 
+=======
+                logits = self.model(inputs)
+                loss = criterion(logits, labels)
+                loss.backward()
+                optimizer.step()
+
+                running_loss += loss.item()
+                if i % 100 == 0:
+                    self.saveResults([epoch, i, running_loss / 100], training=True)
+                    print(f"Epoch {(epoch + 1):2d}, Batch {i:6d}, Loss: {running_loss / 100:.3f}")
+                    running_loss = 0.0
+
+        print("Training complete!")
+>>>>>>> fd52104 (new working with changed train function)
 
     # DONE - evaluate the model on test data
-    def test(self, testData, batchSize, numWorkers, criterion=None):
+    def test(self, test_data, batch_size, num_workers, criterion=None):
         self.model.eval()
         if criterion is None:
             criterion = nn.CrossEntropyLoss()
-        
+
+        data_loader = self.dataLoader(test_data, batch_size, num_workers)
+        loss_total = 0.0
         correct = 0
         samples = 0
 
-        data_loader = self.dataLoader(testData, batchSize, numWorkers)
-        loss_total = 0.0
-
         with torch.no_grad():
-            for inputs, lbls in data_loader:
-                inputs, lbls = inputs.to(device), lbls.to(device)
+            for inputs, labels in data_loader:
+                inputs, labels = inputs.to(device), labels.to(device)
                 logits = self.model(inputs)
-                loss_total += criterion(logits, lbls).item() * lbls.size(0)
-                correct += self.getAccuracy(logits, lbls)
-                samples += lbls.size(0)
+                loss_total += criterion(logits, labels).item() * labels.size(0)
+                correct += self.getAccuracy(logits, labels)
+                samples += labels.size(0)
 
         loss_avg = loss_total / samples if samples else 0.0
         accuracy = correct / samples if samples else 0.0
@@ -508,6 +550,19 @@ if __name__ == "__main__":
             num_fc_layers,
             num_fc_neurons
         )
+<<<<<<< HEAD
+=======
+        cn_model.to(device)
+
+        # cn_optimiser = optim.SGD(
+        #     cn_model.parameters(), cn_learning_rate, momentum=0.75, weight_decay=0.001
+        #     )
+
+        cn_optimiser = optim.Adam(
+            cn_model.parameters(), cn_learning_rate
+        )
+        
+>>>>>>> fd52104 (new working with changed train function)
         cn_trainer = CNNTrainer(cn_model)
         cn_criterion = nn.CrossEntropyLoss()
         cn_optimiser = optim.SGD(
