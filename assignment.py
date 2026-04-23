@@ -36,6 +36,7 @@ C_OUT_CHANNELS = 8
 run_time = time.time()
 DATETIME_STR = datetime.now().strftime("%Y%m%d-%H%M%S")
 OUTPUT_FILE = os.path.join("output_data", f"out_{DATETIME_STR}.txt")
+CSV_FILE = os.path.join("output_data", f"train_{DATETIME_STR}.csv")
 
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
@@ -85,7 +86,7 @@ class SoftMax(nn.Module):
 
 # DONE - softmax trainer tester class
 # class SoftMaxTest():
-#     def __init__(self, model, output_file="training.log"):
+#     def __init__(self, model, output_file="training.csv"):
 #         self.model = model.to(device)
 #         self.output_file = output_file
 
@@ -307,7 +308,7 @@ class CNN(nn.Module):
 # DONE - helper class for training and testing the CNN
 class CNNTrainer():
     # DONE - initialize with model and output file
-    def __init__(self, model, output_file="training.log"):
+    def __init__(self, model, output_file="training.csv"):
         self.model = model.to(device)
         self.output_file = output_file
 
@@ -336,8 +337,8 @@ class CNNTrainer():
     def saveResults(self, values, training=False):
         with open(self.output_file, "a") as f:
             if training:
-                epoch, step, loss = values
-                f.write(f"Epoch {epoch + 1}, Step {step}, Loss: {loss:.4f}\n")
+                epoch, step, loss, learningrate, batchsize = values
+                f.write(f"{epoch + 1}, {step}, {loss:.4f}, {learningrate}, {batchsize}\n")
             else:
                 avg_loss, accuracy = values
                 f.write(f"Test Loss: {avg_loss:.4f}, Accuracy: {accuracy*100:.2f}%\n")
@@ -353,6 +354,8 @@ class CNNTrainer():
 
     # DONE - train the model over a dataset
     def train(self, train_data, epochs, batch_size, num_workers, optimizer, criterion):
+        train_time_start = time.time()
+
         self.model.train()
         data_loader = self.dataLoader(train_data, batch_size, num_workers, shuffle=True)
 
@@ -369,9 +372,18 @@ class CNNTrainer():
 
                 running_loss += loss.item()
                 if i % 100 == 0:
-                    self.saveResults([epoch, i, running_loss / 100], training=True)
+                    self.saveResults([epoch, i, running_loss / 100, cn_learning_rate, cn_batch_size], training=True)
                     print(f"Epoch {(epoch + 1):2d}, Batch {i:6d}, Loss: {running_loss / 100:.3f}")
                     running_loss = 0.0
+        
+        train_time_finish = time.time()
+        train_time = train_time_finish - train_time_start
+
+        print(f"Training time: {train_time} seconds")
+        with open(self.output_file, "a") as f:
+            f.write(
+                f"Training time: {train_time} seconds\n\n"
+            )
 
         print("Training complete!")
 
@@ -411,7 +423,6 @@ if __name__ == "__main__":
             f"----- PARAMETERS -----\n" \
             f"EPOCHS           : {EPOCHS}\n" \
             f"SM_BATCH_SIZE    : {SM_BATCH_SIZE}\n" \
-            f"DROPOUT          : {DROPOUT}\n" \
             f"SM_LEARNING_RATE : {SM_LEARNING_RATE}\n" \
             f"NUM_CLASSES      : {NUM_CLASSES}\n"
             f"----------------------\n\n"
@@ -497,6 +508,10 @@ if __name__ == "__main__":
         )
         
         cn_trainer = CNNTrainer(cn_model)
+
+        with open(cn_trainer.output_file, "a") as f:
+            f.write("epochs,step,loss,learningrate,batchsize\n")
+        
         cn_criterion = nn.CrossEntropyLoss()
         
         cn_trainer.train(
@@ -523,3 +538,7 @@ if __name__ == "__main__":
                 f"Test accuracy           : {cn_accuracy_test} ({(cn_accuracy_test*100):.2f}%)\n" \
                 f"-----------------------------------\n\n"
             )
+        
+        end_time = time.time()
+
+        print(f"Program run time: {end_time - run_time}")
