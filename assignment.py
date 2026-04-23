@@ -24,7 +24,7 @@ OUTPUTS = 10
 EPOCHS = 20
 SM_LEARNING_RATE = 0.001
 NUM_CLASSES = 10
-DROPOUT = 0.001
+DROPOUT = 0.1
 
 NUM_CHANNELS = 3 # rgb
 SM_NUM_TRAIN_WORKERS = 4
@@ -193,38 +193,19 @@ class CNN(nn.Module):
     
     # DONE - build convolutional layer blocks
     def createCLayers(self, num_layers, blocksize):
-
         input_channels = 3
         output_channels = 8
-
         self.layers_c = nn.ModuleList()
 
-        # first layer
+        # Initial Layer
         self.layers_c.append(nn.Sequential(
             nn.Conv2d(input_channels, output_channels, 3, padding=1),
             nn.BatchNorm2d(output_channels),
             nn.ReLU()
         ))
-
+        
         input_channels = output_channels
 
-<<<<<<< HEAD
-        for _ in range(num_layers):
-
-            output_channels = input_channels * 2
-
-            for __ in range(blocksize):
-
-                layer = nn.Sequential(
-                    nn.Conv2d(input_channels, output_channels, 3, padding=1),
-                    nn.BatchNorm2d(output_channels),
-                    nn.ReLU()
-                )
-
-                self.layers_c.append(layer)
-
-                input_channels = output_channels  # 🔥 MUST be here
-=======
         # Create num_layers additional layers
         for i in range(num_layers-1):
             # Double channels every blocksize layers
@@ -240,18 +221,19 @@ class CNN(nn.Module):
             input_channels = output_channels
         
         print(f"Total convolutional layers created: {len(self.layers_c)}")
->>>>>>> fd52104 (new working with changed train function)
 
     # DONE - build fully connected layer sequence
     def createFCLayers(self, num_classes, num_neurons, num_layers):
         new_img_size = self.fetchNewImgDim(self.img_dim)
+        print("Flatten size:", self.fetchNewImgDim(self.img_dim))
 
         next_layer = nn.Sequential(
             nn.Linear(
                 new_img_size,
                 num_neurons
             ),
-            nn.ReLU()
+            nn.ReLU(),
+            nn.Dropout(DROPOUT)
         )
         self.layers_fc.append(next_layer)
         
@@ -262,7 +244,8 @@ class CNN(nn.Module):
                     num_neurons,
                     num_neurons
                 ),
-                nn.ReLU()
+                nn.ReLU(),
+                nn.Dropout(DROPOUT)
             )
             self.layers_fc.append(next_layer)
         
@@ -274,39 +257,11 @@ class CNN(nn.Module):
         )
         self.layers_fc.append(next_layer)
         # test
-
+    
     # DONE - assemble convolutional and fully connected layers
     def createLayers(self, num_c_layers, c_blocksize, num_fc_layers, num_fc_neurons, num_classes):
         self.createCLayers(num_c_layers, c_blocksize)
         self.createFCLayers(num_classes, num_fc_neurons, num_fc_layers)
-<<<<<<< HEAD
-
-        num_features = self.fetchNewImgDim(32)
-        self.fc_norm = nn.LayerNorm(num_features)
-
-    def createFCLayers(self, num_classes, num_neurons, num_layers):
-        new_img_size = self.fetchNewImgDim(self.img_dim)
-
-        next_layer = nn.Sequential(
-        nn.Linear(new_img_size,num_neurons), nn.ReLU())
-        self.layers_fc.append(next_layer)
-        
-        for _ in range(num_layers):
-            
-            next_layer = nn.Sequential(
-                nn.Linear(num_neurons, num_neurons), nn.ReLU())
-            self.layers_fc.append(next_layer)
-        
-        next_layer = nn.Sequential(
-            nn.Linear(
-                num_neurons,
-                num_classes
-            )
-        )
-        self.layers_fc.append(next_layer)
-        # test
-=======
->>>>>>> fd52104 (new working with changed train function)
     
     # DONE - compute flattened feature dimension for classifier input
     def fetchNewImgDim(self, img_dim):
@@ -321,7 +276,8 @@ class CNN(nn.Module):
                 x = layer(x)
 
                 if self.c_blocksize > 0 and (i + 1) % self.c_blocksize == 0:
-                    x = self.pool(x)
+                    if x.shape[2] > 2:  # Only pool if height/width is greater than 2
+                        x = self.pool(x)
 
             features = x.view(1, -1).shape[1]
 
@@ -329,19 +285,23 @@ class CNN(nn.Module):
         return features
     
     # DONE - forward pass through the CNN model
-    def forward(self, x):
+    def forward(self, ins):
+        out = ins
+
         for i, layer_c in enumerate(self.layers_c):
-            x = layer_c(x)
+            out = layer_c(out)
 
             if (i + 1) % self.c_blocksize == 0:
-                x = self.pool(x)
-        x = torch.flatten(x, 1)
-        x = self.fc_norm(x)
-        for fcLayer in self.layers_fc[:-1]:
-            x = fcLayer(x)
+                out = self.pool(out)
 
-        x = self.layers_fc[-1](x)
-        return x
+        out = torch.flatten(out, 1)  # flatten all dimensions except batch
+
+        for layer_fc in self.layers_fc[:-1]:
+            out = layer_fc(out)
+
+        out = self.layers_fc[-1](out)
+
+        return out
 
 
 # DONE - helper class for training and testing the CNN
@@ -384,9 +344,7 @@ class CNNTrainer():
 
     # DONE - calculate CEL
     def getLoss(self, logits, lbls):
-        lossFunc = nn.CrossEntropyLoss()
-        loss = lossFunc(logits, lbls)
-        return loss
+        return nn.CrossEntropyLoss()(logits, lbls)
 
     # DONE - acc soft
     def getAccuracy(self, logits, lbls):
@@ -394,44 +352,16 @@ class CNNTrainer():
         return (predicted == lbls).sum().item()
 
     # DONE - train the model over a dataset
-<<<<<<< HEAD
-
-    def train(self, trainData, epochs, batchSize, trainNumWorkers, optimizer, criterion):
-        self.model.train()
-        dataLoader = self.dataLoader(trainData, batchSize, trainNumWorkers)
-
-        for epoch in range(epochs): 
-=======
     def train(self, train_data, epochs, batch_size, num_workers, optimizer, criterion):
         self.model.train()
         data_loader = self.dataLoader(train_data, batch_size, num_workers, shuffle=True)
 
         for epoch in range(epochs):
->>>>>>> fd52104 (new working with changed train function)
             running_loss = 0.0
             for i, (inputs, labels) in enumerate(data_loader, 1):
                 inputs, labels = inputs.to(device), labels.to(device)
                 optimizer.zero_grad()
 
-<<<<<<< HEAD
-                optimizer.zero_grad()
-
-                outputs = self.model(inputs)
-
-                loss = criterion(outputs, labels)
-                loss.backward()
-                optimizer.step()
-
-                
-                running_loss += loss.item()
-                if i % 100 == 99:    # print every 100 mini-batches
-                    data = [epoch, i+1, running_loss/100]
-                    print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / 100:.3f}')
-                    running_loss = 0.0
-
-        print('Finished Training')
-
-=======
                 logits = self.model(inputs)
                 loss = criterion(logits, labels)
                 loss.backward()
@@ -444,7 +374,6 @@ class CNNTrainer():
                     running_loss = 0.0
 
         print("Training complete!")
->>>>>>> fd52104 (new working with changed train function)
 
     # DONE - evaluate the model on test data
     def test(self, test_data, batch_size, num_workers, criterion=None):
@@ -516,18 +445,25 @@ if __name__ == "__main__":
 
     # CNN 2, 8, 16 and 32 layers
 
-    cn_learning_rate = SM_LEARNING_RATE
-    cn_num_train_workers = 0
-    cn_num_test_workers = 0
+    cn_num_train_workers = 4
+    cn_num_test_workers = 1
     cn_learning_rate = 0.01
     cn_batch_size = 128
+    
+    num_c_layers = 2
+    c_blocksize = 2
+    num_fc_layers = 4
+    num_fc_neurons = 128
 
     for i in range(1, 6):
         if i == 2: # skip i^2==4 layer
             continue
         num_c_layers = pow(2, i)
-        c_blocksize = 2
-        num_fc_layers = 2
+        if num_c_layers >= 16:
+            c_blocksize = 8 
+        else:
+            c_blocksize = 2
+        num_fc_layers = 4
         num_fc_neurons = 128
 
         with open(OUTPUT_FILE, "a") as f:
@@ -537,7 +473,7 @@ if __name__ == "__main__":
                 f"c_blocksize    : {c_blocksize}\n" \
                 f"num_fc_layers  : {num_fc_layers}\n" \
                 f"num_fc_neurons : {num_fc_neurons}\n" \
-                f"----------------------"
+                f"----------------------\n\n"
             )
         
         print(f" - Training CNN... ({num_c_layers} layers)")
@@ -550,8 +486,6 @@ if __name__ == "__main__":
             num_fc_layers,
             num_fc_neurons
         )
-<<<<<<< HEAD
-=======
         cn_model.to(device)
 
         # cn_optimiser = optim.SGD(
@@ -562,12 +496,8 @@ if __name__ == "__main__":
             cn_model.parameters(), cn_learning_rate
         )
         
->>>>>>> fd52104 (new working with changed train function)
         cn_trainer = CNNTrainer(cn_model)
         cn_criterion = nn.CrossEntropyLoss()
-        cn_optimiser = optim.SGD(
-            cn_model.parameters(), cn_learning_rate, momentum=0.9, weight_decay=0.0001
-            )
         
         cn_trainer.train(
             data_train,
